@@ -1,0 +1,278 @@
+<div id="diagram-overlay" class="diagram-overlay"></div>
+<script>
+(function() {
+  // ═══════════════════════════════════════════════════════════════════════════
+  // BACK TO INDEX NAVIGATION
+  // ═══════════════════════════════════════════════════════════════════════════
+  function setupBackButton() {
+    // get filename from URL (works for both http and file:// protocols)
+    const url = window.location.href;
+    const filename = url.split('/').pop().split('?')[0].split('#')[0];
+    
+    // check if this is a trade page (trade_0, trade_1, etc.) but not the index
+    const is_trade_page = filename.match(/^trade_\d/);
+    const is_index = filename.includes('index');
+    
+    if (is_trade_page && !is_index) {
+      const btn = document.createElement('a');
+      btn.className = 'back-to-index';
+      btn.href = 'trade_index.html';
+      btn.textContent = '← Index';
+      btn.title = 'Back to pathway index';
+      document.body.appendChild(btn);
+    }
+  }
+  
+  document.addEventListener('DOMContentLoaded', setupBackButton);
+  // also try on load in case DOMContentLoaded already fired
+  if (document.readyState === 'complete') setupBackButton();
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TOC COLLAPSE/EXPAND TOGGLE
+  // ═══════════════════════════════════════════════════════════════════════════
+  function setupTocToggle() {
+    // Quarto TOC selectors - try multiple patterns
+    const tocNav = document.querySelector('nav#TOC, nav.toc, #quarto-margin-sidebar nav, .margin-sidebar nav');
+    if (!tocNav) return;
+    
+    const tocTitle = tocNav.querySelector('h2, .toc-title, #toc-title');
+    const tocList = tocNav.querySelector('ul');
+    
+    if (!tocTitle || !tocList) return;
+    if (tocTitle.dataset.toggleSetup) return;  // prevent double binding
+    tocTitle.dataset.toggleSetup = 'true';
+    
+    // Add clickable class and cursor
+    tocTitle.classList.add('toc-clickable');
+    tocTitle.style.cursor = 'pointer';
+    tocTitle.style.userSelect = 'none';
+    
+    // Add arrow if not present
+    let arrow = tocTitle.querySelector('.toc-arrow');
+    if (!arrow) {
+      arrow = document.createElement('span');
+      arrow.className = 'toc-arrow';
+      arrow.textContent = ' ▼';
+      arrow.style.fontSize = '0.6em';
+      arrow.style.marginLeft = '0.3em';
+      arrow.style.display = 'inline-block';
+      arrow.style.transition = 'transform 0.2s ease';
+      tocTitle.appendChild(arrow);
+    }
+    
+    // Toggle function - uses CSS class with !important to override
+    function toggleToc() {
+      const isCollapsed = tocList.classList.contains('toc-collapsed');
+      if (isCollapsed) {
+        tocList.classList.remove('toc-collapsed');
+        arrow.style.transform = 'rotate(0deg)';
+      } else {
+        tocList.classList.add('toc-collapsed');
+        arrow.style.transform = 'rotate(-90deg)';
+      }
+    }
+    
+    tocTitle.addEventListener('click', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleToc();
+    });
+  }
+  
+  document.addEventListener('DOMContentLoaded', setupTocToggle);
+  setTimeout(setupTocToggle, 500);
+  setTimeout(setupTocToggle, 1500);
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // DIAGRAM ZOOM OVERLAY
+  // ═══════════════════════════════════════════════════════════════════════════
+  const overlay = document.getElementById('diagram-overlay');
+  
+  // ─────────────────────────────────────────────────────────────────────────────
+  // SCROLL WHEEL ZOOM STATE
+  // ─────────────────────────────────────────────────────────────────────────────
+  const zoom_state = new WeakMap();  // store zoom per element
+  const ZOOM_MIN = 0.25;
+  const ZOOM_MAX = 5.0;
+  const ZOOM_STEP = 0.15;
+  
+  // save page scroll position when entering expanded mode
+  let saved_scroll_x = 0;
+  let saved_scroll_y = 0;
+  
+  function get_zoom_(_el) {
+    if (!zoom_state.has(_el)) zoom_state.set(_el, 1.0);
+    return zoom_state.get(_el);
+  }
+  
+  function set_zoom_(_el, _val) {
+    const clamped = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, _val));
+    zoom_state.set(_el, clamped);
+    return clamped;
+  }
+  
+  function apply_zoom_(_el, _cursor_x, _cursor_y, _old_scale) {
+    const svg = _el.querySelector('svg');
+    const pre = _el.tagName === 'PRE' ? _el : _el.querySelector('pre');
+    const target = svg || pre;
+    if (!target) return;
+    
+    const scale = get_zoom_(_el);
+    target.style.transform = 'scale(' + scale + ')';
+    target.style.transformOrigin = '0 0';  // always top-left
+    target.style.transition = 'transform 0.05s ease-out';
+    
+    // adjust scroll position to keep cursor point fixed
+    if (_cursor_x !== undefined && _cursor_y !== undefined && _old_scale !== undefined) {
+      const scroll_x = _el.scrollLeft;
+      const scroll_y = _el.scrollTop;
+      
+      // cursor position in content coordinates (before zoom)
+      const content_x = (scroll_x + _cursor_x) / _old_scale;
+      const content_y = (scroll_y + _cursor_y) / _old_scale;
+      
+      // new scroll position to keep that point under cursor
+      _el.scrollLeft = content_x * scale - _cursor_x;
+      _el.scrollTop = content_y * scale - _cursor_y;
+    }
+  }
+  
+  function reset_zoom_(_el) {
+    zoom_state.set(_el, 1.0);
+    const svg = _el.querySelector('svg');
+    const pre = _el.tagName === 'PRE' ? _el : _el.querySelector('pre');
+    const target = svg || pre;
+    if (target) {
+      target.style.transform = '';
+      target.style.transformOrigin = '';
+    }
+  }
+  
+  function handle_wheel_(_e) {
+    const expanded = document.querySelector('.expanded');
+    if (!expanded) return;
+    
+    // ONLY apply zoom to mermaid/SVG diagrams, not code blocks
+    const svg = expanded.querySelector('svg');
+    if (!svg) {
+      // For code blocks: contain scroll within expanded element, don't leak to page
+      _e.stopPropagation();
+      
+      // Prevent scroll chaining at boundaries
+      const at_top = expanded.scrollTop <= 0;
+      const at_bottom = expanded.scrollTop + expanded.clientHeight >= expanded.scrollHeight;
+      const scrolling_up = _e.deltaY < 0;
+      const scrolling_down = _e.deltaY > 0;
+      
+      if ((at_top && scrolling_up) || (at_bottom && scrolling_down)) {
+        _e.preventDefault();  // block scroll at boundaries
+      }
+      return;
+    }
+    
+    // prevent page scroll when zooming mermaid
+    _e.preventDefault();
+    _e.stopPropagation();
+    
+    // cursor position relative to the container viewport
+    const container_rect = expanded.getBoundingClientRect();
+    const cursor_x = _e.clientX - container_rect.left;
+    const cursor_y = _e.clientY - container_rect.top;
+    
+    const old_scale = get_zoom_(expanded);
+    const delta = _e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP;
+    set_zoom_(expanded, old_scale + delta);
+    apply_zoom_(expanded, cursor_x, cursor_y, old_scale);
+  }
+  
+  // global wheel listener - only active when expanded
+  document.addEventListener('wheel', handle_wheel_, { passive: false });
+  
+  // ─────────────────────────────────────────────────────────────────────────────
+  
+  function setCursor(el, expanded) {
+    el.style.cursor = expanded ? 'zoom-out' : 'zoom-in';
+  }
+  function toggleExpand(el) {
+    if (el.classList.contains('expanded')) {
+      el.classList.remove('expanded');
+      overlay.classList.remove('active');
+      setCursor(el, false);
+      reset_zoom_(el);  // reset zoom on collapse
+      // restore page scroll position
+      window.scrollTo(saved_scroll_x, saved_scroll_y);
+    } else {
+      // save page scroll position before expanding
+      saved_scroll_x = window.scrollX;
+      saved_scroll_y = window.scrollY;
+      
+      document.querySelectorAll('.expanded').forEach(x => {
+        x.classList.remove('expanded');
+        setCursor(x, false);
+        reset_zoom_(x);
+      });
+      el.classList.add('expanded');
+      overlay.classList.add('active');
+      setCursor(el, true);
+      // scroll to top so long graphs start from the beginning
+      setTimeout(function() { el.scrollTop = 0; }, 10);
+    }
+  }
+  function setupClickable() {
+    document.querySelectorAll('div:has(> svg), .mermaid, .quarto-figure, .cell-output-display').forEach(function(el) {
+      const svg = el.querySelector('svg');
+      if (svg && !el.dataset.clickSetup) {
+        el.dataset.clickSetup = 'true';
+        el.style.cursor = 'zoom-in';
+        el.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); toggleExpand(this); });
+        svg.style.cursor = 'inherit';
+      }
+    });
+    document.querySelectorAll('pre').forEach(function(el) {
+      if (el.dataset.clickSetup) return;
+      if (el.querySelector('.sourceCode') || el.classList.contains('sourceCode')) return;
+      const text = el.textContent || '';
+      if (text.match(/[┌┐└┘│─├┤┬┴┼═║╔╗╚╝╠╣╦╩╬↑↓←→▲▼◀▶┏┓┗┛┃━╭╮╰╯]/)) {
+        el.dataset.clickSetup = 'true';
+        el.style.cursor = 'zoom-in';
+        el.addEventListener('click', function(e) { e.stopPropagation(); toggleExpand(this); });
+      }
+    });
+    document.querySelectorAll('pre.sourceCode, div.sourceCode').forEach(function(el) {
+      if (el.dataset.clickSetup) return;
+      el.dataset.clickSetup = 'true';
+      el.style.cursor = 'zoom-in';
+      el.addEventListener('click', function(e) {
+        if (e.target.closest('.code-copy-button')) return;
+        e.stopPropagation();
+        toggleExpand(this);
+      });
+    });
+  }
+  document.addEventListener('DOMContentLoaded', setupClickable);
+  setTimeout(setupClickable, 500); setTimeout(setupClickable, 1500); setTimeout(setupClickable, 3000);
+  overlay.addEventListener('click', function() {
+    document.querySelectorAll('.expanded').forEach(x => {
+      x.classList.remove('expanded');
+      setCursor(x, false);
+      reset_zoom_(x);
+    });
+    this.classList.remove('active');
+    // restore page scroll position
+    window.scrollTo(saved_scroll_x, saved_scroll_y);
+  });
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      document.querySelectorAll('.expanded').forEach(x => {
+        x.classList.remove('expanded');
+        setCursor(x, false);
+        reset_zoom_(x);
+      });
+      overlay.classList.remove('active');
+      // restore page scroll position
+      window.scrollTo(saved_scroll_x, saved_scroll_y);
+    }
+  });
+})();
+</script>
+

@@ -1,0 +1,20 @@
+format:
+  html:
+    embed-resources: true
+    theme: darkly
+    toc: true
+    toc-depth: 2
+    toc-location: right
+    toc-title: "📑 Contents"
+    toc-expand: 2
+    code-fold: true
+    smooth-scroll: true
+    fontsize: 0.9em
+    linestretch: 1.35
+    highlight-style: monokai
+    page-layout: article
+    mermaid:
+      theme: dark
+    css: RSS/main-theme.css
+    include-after-body: RSS/main-theme.html
+
