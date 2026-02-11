@@ -5,6 +5,8 @@
   // BACK TO INDEX NAVIGATION
   // ═══════════════════════════════════════════════════════════════════════════
   function setupBackButton() {
+    if (document.querySelector('.back-to-index')) return;  // idempotent
+    
     // get filename from URL (works for both http and file:// protocols)
     const url = window.location.href;
     const filename = url.split('/').pop().split('?')[0].split('#')[0];
@@ -28,60 +30,60 @@
   if (document.readyState === 'complete') setupBackButton();
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // TOC COLLAPSE/EXPAND TOGGLE
+  // TOC SIDEBAR COLLAPSE/EXPAND TOGGLE
   // ═══════════════════════════════════════════════════════════════════════════
   function setupTocToggle() {
-    // Quarto TOC selectors - try multiple patterns
-    const tocNav = document.querySelector('nav#TOC, nav.toc, #quarto-margin-sidebar nav, .margin-sidebar nav');
-    if (!tocNav) return;
-    
-    const tocTitle = tocNav.querySelector('h2, .toc-title, #toc-title');
-    const tocList = tocNav.querySelector('ul');
-    
-    if (!tocTitle || !tocList) return;
-    if (tocTitle.dataset.toggleSetup) return;  // prevent double binding
-    tocTitle.dataset.toggleSetup = 'true';
-    
-    // Add clickable class and cursor
-    tocTitle.classList.add('toc-clickable');
-    tocTitle.style.cursor = 'pointer';
-    tocTitle.style.userSelect = 'none';
-    
-    // Add arrow if not present
-    let arrow = tocTitle.querySelector('.toc-arrow');
-    if (!arrow) {
-      arrow = document.createElement('span');
-      arrow.className = 'toc-arrow';
-      arrow.textContent = ' ▼';
-      arrow.style.fontSize = '0.6em';
-      arrow.style.marginLeft = '0.3em';
-      arrow.style.display = 'inline-block';
-      arrow.style.transition = 'transform 0.2s ease';
-      tocTitle.appendChild(arrow);
-    }
-    
-    // Toggle function - uses CSS class with !important to override
-    function toggleToc() {
-      const isCollapsed = tocList.classList.contains('toc-collapsed');
-      if (isCollapsed) {
-        tocList.classList.remove('toc-collapsed');
-        arrow.style.transform = 'rotate(0deg)';
-      } else {
-        tocList.classList.add('toc-collapsed');
-        arrow.style.transform = 'rotate(-90deg)';
-      }
-    }
-    
-    tocTitle.addEventListener('click', function(e) {
+    const sidebar = document.querySelector('#quarto-margin-sidebar, .margin-sidebar');
+    if (!sidebar) return;
+    if (sidebar.dataset.toggleSetup) return;
+    sidebar.dataset.toggleSetup = 'true';
+
+    // Create toggle button — inserted at top of sidebar
+    const btn = document.createElement('button');
+    btn.className = 'toc-toggle-btn';
+    btn.textContent = '\u25B6'; // ▶ (points right = click to collapse)
+    btn.title = 'Toggle contents';
+    sidebar.insertBefore(btn, sidebar.firstChild);
+
+    btn.addEventListener('click', function(e) {
       e.preventDefault();
       e.stopPropagation();
-      toggleToc();
+      const collapsed = sidebar.classList.toggle('toc-sidebar-collapsed');
+      btn.textContent = collapsed ? '\u25C0' : '\u25B6'; // ◀ expand or ▶ collapse
     });
   }
-  
+
   document.addEventListener('DOMContentLoaded', setupTocToggle);
   setTimeout(setupTocToggle, 500);
   setTimeout(setupTocToggle, 1500);
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // BACK TO TOP BUTTON
+  // ═══════════════════════════════════════════════════════════════════════════
+  function setupBackToTop() {
+    if (document.querySelector('.back-to-top')) return;  // idempotent
+    
+    const btn = document.createElement('button');
+    btn.className = 'back-to-top';
+    btn.textContent = '\u25B2'; // ▲
+    btn.title = 'Back to top';
+    document.body.appendChild(btn);
+
+    btn.addEventListener('click', function() {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+
+    window.addEventListener('scroll', function() {
+      if (window.scrollY > 300) {
+        btn.classList.add('visible');
+      } else {
+        btn.classList.remove('visible');
+      }
+    }, { passive: true });
+  }
+
+  document.addEventListener('DOMContentLoaded', setupBackToTop);
+  if (document.readyState === 'complete') setupBackToTop();
   
   // ═══════════════════════════════════════════════════════════════════════════
   // DIAGRAM ZOOM OVERLAY
@@ -185,13 +187,27 @@
     apply_zoom_(expanded, cursor_x, cursor_y, old_scale);
   }
   
-  // global wheel listener - only active when expanded
-  document.addEventListener('wheel', handle_wheel_, { passive: false });
+  // wheel listener — attached only while a diagram is expanded
+  let wheel_attached_ = false;
+  
+  function attach_wheel_() {
+    if (!wheel_attached_) {
+      document.addEventListener('wheel', handle_wheel_, { passive: false });
+      wheel_attached_ = true;
+    }
+  }
+  
+  function detach_wheel_() {
+    if (wheel_attached_) {
+      document.removeEventListener('wheel', handle_wheel_);
+      wheel_attached_ = false;
+    }
+  }
   
   // ─────────────────────────────────────────────────────────────────────────────
   
   function setCursor(el, expanded) {
-    el.style.cursor = expanded ? 'zoom-out' : 'zoom-in';
+    el.style.cursor = expanded ? '' : 'zoom-in';
   }
   function toggleExpand(el) {
     if (el.classList.contains('expanded')) {
@@ -199,6 +215,7 @@
       overlay.classList.remove('active');
       setCursor(el, false);
       reset_zoom_(el);  // reset zoom on collapse
+      detach_wheel_();
       // restore page scroll position
       window.scrollTo(saved_scroll_x, saved_scroll_y);
     } else {
@@ -214,6 +231,7 @@
       el.classList.add('expanded');
       overlay.classList.add('active');
       setCursor(el, true);
+      attach_wheel_();
       // scroll to top so long graphs start from the beginning
       setTimeout(function() { el.scrollTop = 0; }, 10);
     }
@@ -224,7 +242,10 @@
       if (svg && !el.dataset.clickSetup) {
         el.dataset.clickSetup = 'true';
         el.style.cursor = 'zoom-in';
-        el.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); toggleExpand(this); });
+        el.addEventListener('click', function(e) {
+          if (document.querySelector('.expanded')) return; // allow select/copy inside expanded
+          e.preventDefault(); e.stopPropagation(); toggleExpand(this);
+        });
         svg.style.cursor = 'inherit';
       }
     });
@@ -235,7 +256,10 @@
       if (text.match(/[┌┐└┘│─├┤┬┴┼═║╔╗╚╝╠╣╦╩╬↑↓←→▲▼◀▶┏┓┗┛┃━╭╮╰╯]/)) {
         el.dataset.clickSetup = 'true';
         el.style.cursor = 'zoom-in';
-        el.addEventListener('click', function(e) { e.stopPropagation(); toggleExpand(this); });
+        el.addEventListener('click', function(e) {
+          if (document.querySelector('.expanded')) return; // allow select/copy inside expanded
+          e.stopPropagation(); toggleExpand(this);
+        });
       }
     });
     document.querySelectorAll('pre.sourceCode, div.sourceCode').forEach(function(el) {
@@ -243,6 +267,7 @@
       el.dataset.clickSetup = 'true';
       el.style.cursor = 'zoom-in';
       el.addEventListener('click', function(e) {
+        if (document.querySelector('.expanded')) return; // allow select/copy inside expanded
         if (e.target.closest('.code-copy-button')) return;
         e.stopPropagation();
         toggleExpand(this);
@@ -258,6 +283,7 @@
       reset_zoom_(x);
     });
     this.classList.remove('active');
+    detach_wheel_();
     // restore page scroll position
     window.scrollTo(saved_scroll_x, saved_scroll_y);
   });
@@ -269,10 +295,10 @@
         reset_zoom_(x);
       });
       overlay.classList.remove('active');
+      detach_wheel_();
       // restore page scroll position
       window.scrollTo(saved_scroll_x, saved_scroll_y);
     }
   });
 })();
 </script>
-
